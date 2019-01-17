@@ -1,7 +1,7 @@
 from __future__ import print_function, absolute_import, division, unicode_literals
 
 from argparse import ArgumentParser
-from datetime import datetime as dtime
+from datetime import datetime as dtime, timedelta as tdel
 from glob import glob
 import re
 import os
@@ -16,6 +16,8 @@ _wrf_date_re = re.compile(r'\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}')
 _wrf_date_fmt = '%Y-%m-%d_%H:%M:%S'
 
 _default_output_pattern = '%Y%m%d.%Hz.wrf{domain:02d}'
+
+_default_reinit_pattern = 'Reinit-' + _wrf_date_fmt
 
 
 def _mkdir_recursive(new_dir):
@@ -89,10 +91,12 @@ def drive_wrfnc2arl(file_pattern, arl_variable_file, recursive=False, output_dir
 
 
 def setup_clargs(parser=None):
+    description = 'Bulk convert WRF files to ARL format'
     if parser is None:
-        parser = ArgumentParser(description='Bulk convert WRF files to ARL format')
+        parser = ArgumentParser(description=description)
         i_am_main = True
     else:
+        parser.description = description
         i_am_main = False
 
     parser.add_argument('file_pattern', help='Convert files matching this pattern. Enclose in quotes to avoid '
@@ -123,6 +127,96 @@ def main():
     args = setup_clargs()
     exec_func = args.pop('exec_fxn')
     exec_func(**args)
+
+
+############################
+# For linking reinit files #
+############################
+
+def _datefmt_to_re(fmt):
+    replacements = {'%Y': r'\d\d\d\d', '%m': r'\d\d', '%d': r'\d\d', '%H': r'\d\d', '%M': r'\d\d', '%S': r'\d\d'}
+    for old, new in replacements.items():
+        fmt = fmt.replace(old, new)
+
+    if '%' in fmt:
+        raise ValueError('Some time formats not understood. End result was {}'.format(fmt))
+    else:
+        return fmt
+
+
+def drive_link_reinit(spinup_time, output_dir, input_dir='.', reinit_pattern=_default_reinit_pattern,
+                      arl_pattern=_default_output_pattern):
+    # Don't care what domain it is, just link it
+    arl_date_pattern = re.sub(r'\{.*?domain.*?\}', '', arl_pattern)
+    arl_re_pattern = _datefmt_to_re(arl_date_pattern)
+
+    possible_reinit_dirs = os.listdir(input_dir)
+    for d in possible_reinit_dirs:
+        try:
+            reinit_datetime = dtime.strptime(d, reinit_pattern)
+        except ValueError:
+            # doesn't match the pattern given for the reinit directories, skip
+            continue
+
+        possible_arl_files = os.listdir(os.path.join(input_dir, d))
+        for f in possible_arl_files:
+            date_part = re.search(arl_re_pattern, f)
+            if date_part is not None:
+                arl_date = dtime.strptime(date_part.group(), arl_date_pattern)
+                if arl_date - reinit_datetime > spinup_time:
+                    arl_src = os.path.abspath(os.path.join(input_dir, d, f))
+                    arl_dest = os.path.join(output_dir, f)
+                    if os.path.islink(arl_dest):
+                        os.remove(arl_dest)
+                    os.symlink(arl_src, arl_dest)
+
+
+def _parse_time_string_dhms(time_str):
+    parts = {'days': re.compile(r'\d+(?=d)'),
+             'hours': re.compile(r'\d+(?=h)'),
+             'minutes': re.compile(r'\d+(?=m)'),
+             'seconds': re.compile(r'\d+(?=s)')}
+
+    durations = dict()
+    for part, regex in parts.items():
+        user_dur = regex.search(time_str)
+        if user_dur is not None:
+            durations[part] = int(user_dur.group())
+
+    return tdel(**durations)
+
+
+def setup_link_clargs(parser=None):
+    description = 'Link files from multiple reinitialization directories into one'
+    if parser is None:
+        parser = ArgumentParser(description=description)
+        i_am_main = True
+    else:
+        parser.description = description
+        i_am_main = False
+
+    parser.add_argument('spinup_time', type=_parse_time_string_dhms,
+                        help='How long from the start of each reinitialization to treat as spinup and '
+                             'not link. Give as NdNhNmNs, where the Ns are days, hours, minutes or '
+                             'seconds. Any part may be omitted, e.g. "1d", "6h", or "1d6h" are all '
+                             'valid values.')
+    parser.add_argument('input_dir', default='.', nargs='?', help='The directory to find the Reinit subdirectories in.')
+    parser.add_argument('-o', '--output-dir', default='.', help='Where to link the ARL files to')
+    parser.add_argument('--reinit-pattern', default=_default_reinit_pattern,
+                        help='The pattern to match reinitialization directories. Default is "%(default)s".')
+    parser.add_argument('--arl-pattern', default=_default_output_pattern,
+                        help='The pattern to match for ARL files. Default is "%(default)s".')
+
+    parser.set_defaults(exec_fxn=drive_link_reinit)
+
+    if i_am_main:
+        return vars(parser.parse_args())
+
+
+def link_main():
+    args = setup_link_clargs()
+    exec_fxn = args.pop('exec_fxn')
+    exec_fxn(**args)
 
 
 if __name__ == '__main__':
