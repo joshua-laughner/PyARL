@@ -104,7 +104,7 @@ def read_arl(filename):
         nz = grid_hdr['n_levels']
         data = _make_empty_arrays_for_vars(level_hdrs, nx, ny, nz)
 
-        record_hdr += _read_data(fhandle, data, level_hdrs)
+        record_hdr = [record_hdr] + _read_data(fhandle, data, level_hdrs)
 
     return data, record_hdr, grid_hdr, level_hdrs
 

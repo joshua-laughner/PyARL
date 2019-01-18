@@ -15,7 +15,7 @@ _wrf_domain_re = re.compile(r'(?<=d)\d{2}')
 _wrf_date_re = re.compile(r'\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}')
 _wrf_date_fmt = '%Y-%m-%d_%H:%M:%S'
 
-_default_output_pattern = '%Y%m%d.%Hz.wrf{domain:02d}'
+_default_output_pattern = '%Y%m%d.%Hz.wrf_d{domain:02d}'
 
 _default_reinit_pattern = 'Reinit-' + _wrf_date_fmt
 
@@ -39,10 +39,11 @@ def _mkdir_recursive(new_dir):
 
     :return: None
     """
-    dir_parts = new_dir.split(os.pathsep)
+    dir_parts = new_dir.split(os.sep)
     for i in range(len(dir_parts)):
-        sub_dir = os.path.join(dir_parts[:i+1])
+        sub_dir = os.path.join(*dir_parts[:i+1])
         if not os.path.isdir(sub_dir):
+            print('Creating', sub_dir)
             os.mkdir(sub_dir)
 
 
@@ -73,11 +74,12 @@ def _convert_wrf_file(wrf_file, wrfnc2arl_exe, variable_file, output_dir='.',
     :return: None
     """
     wrf_base_filename = os.path.basename(wrf_file)
+    wrf_dirname = os.path.dirname(wrf_file)
     wrf_datetime = dtime.strptime(_wrf_date_re.search(wrf_base_filename).group(), _wrf_date_fmt)
     domain = int(_wrf_domain_re.search(wrf_base_filename).group())
     output_file = output_pattern.format(domain=domain)
     output_file = wrf_datetime.strftime(output_file)
-    output_file = os.path.join(output_dir, output_file)
+    output_file = os.path.join(output_dir, wrf_dirname, output_file)
 
     subprocess.check_call([wrfnc2arl_exe, '-P', variable_file, wrf_file])
     _mkdir_recursive(os.path.dirname(output_file))
@@ -153,6 +155,8 @@ def _get_variable_file(variable_file, wrf2arl_dir):
 
     if not os.path.isfile(variable_file):
         raise RuntimeError('Specified variable file ({}) does not exist'.format(variable_file))
+
+    return variable_file
 
 
 def drive_wrfnc2arl(file_pattern, arl_variable_file, recursive=False, output_dir='.',
