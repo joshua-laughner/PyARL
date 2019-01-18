@@ -21,6 +21,24 @@ _default_reinit_pattern = 'Reinit-' + _wrf_date_fmt
 
 
 def _mkdir_recursive(new_dir):
+    """
+    Make a full directory path even if intemediate parts don't exist.
+
+    Should behave equivalently to "mkdir -p" on Unix systems, not tested on Windows. Example::
+
+        _mkdir_recursive('WRF/Run1/Data')
+
+    would create the directories 'WRF', 'WRF/Run1', and 'WRF/Run1/Data' starting from the current directory even if only
+    'WRF' existed.
+
+    Favored over ``os.makedirs(new_dir, exist_ok=True)`` for Python 2 compatibility.
+
+    :param new_dir: the directory path to make; make be relative or absolute. If relative, is interpreted as relative
+     to the current directory.
+    :type new_dir: str
+
+    :return: None
+    """
     dir_parts = new_dir.split(os.pathsep)
     for i in range(len(dir_parts)):
         sub_dir = os.path.join(dir_parts[:i+1])
@@ -31,6 +49,29 @@ def _mkdir_recursive(new_dir):
 def _convert_wrf_file(wrf_file, wrfnc2arl_exe, variable_file, output_dir='.',
                       output_pattern=_default_output_pattern):
 
+    """
+    Convert a single WRF file to a single ARL file.
+
+    :param wrf_file: the path to the WRF output file to convert.
+    :type wrf_file: str
+
+    :param wrfnc2arl_exe: the path to the ``wrfnc2arl`` executable.
+    :type wrfnc2arl_exe: str
+
+    :param variable_file: the path to the variable file used by wrfnc2arl (via its ``-P`` option) to map WRF variables
+     to ARL variables.
+    :type variable_file: str
+
+    :param output_dir: the directory to move the ARL files to.
+    :type output_dir: str
+
+    :param output_pattern: the pattern to use to name the ARL files. Both the bracket syntax for string formatting and
+     `datetime.strptime` syntax will be applied, with the `datetime` formatting second. The string formatting will give
+     the domain number as the ``domain`` keyword.
+    :type output_pattern: str
+
+    :return: None
+    """
     wrf_base_filename = os.path.basename(wrf_file)
     wrf_datetime = dtime.strptime(_wrf_date_re.search(wrf_base_filename).group(), _wrf_date_fmt)
     domain = int(_wrf_domain_re.search(wrf_base_filename).group())
@@ -44,10 +85,34 @@ def _convert_wrf_file(wrf_file, wrfnc2arl_exe, variable_file, output_dir='.',
 
 
 def _globstr2restr(globstr):
+    """
+    Change a glob pattern string into a regular expression.
+
+    Replaces '*' with '.*' and '?' with '.'
+
+    :param globstr: the glob pattern string to change
+    :type globstr: str
+
+    :return: the regular expression string
+    :rtype: str
+    """
     return globstr.replace('*', '.*').replace('?', '.')
 
 
 def _build_wrf_file_list(file_pattern, recursive_search=False):
+    """
+    Build the list of WRF files to convert
+
+    :param file_pattern: the glob pattern to match files against
+    :type file_pattern: str
+
+    :param recursive_search: optional, if ``True``, then all directories under the current one are searched for files
+     matching ``file_pattern``.
+    :type recursive_search: bool
+
+    :return: the list of files
+    :rtype: list
+    """
     if not recursive_search:
         return glob(file_pattern)
 
@@ -63,6 +128,23 @@ def _build_wrf_file_list(file_pattern, recursive_search=False):
 
 
 def _get_variable_file(variable_file, wrf2arl_dir):
+    """
+    Figure out which WRF -> ARL variable table file to use
+
+    :param variable_file: the filename specified by the user
+    :type variable_file: str
+
+    :param wrf2arl_dir: the directory containing the wrfnc2arl executable and, more relevantly, the sample variable
+     files.
+    :type wrf2arl_dir: str
+
+    :return: the path to the variable file. If given as an absolute path or a relative path starting with '.' or '..',
+     it is returned unchanged. Otherwise, it is assumed to be the name of a file in the wrf2arl directory; e.g. if given
+     'var_sample', then ``os.path.join(wrf2arl_dir, 'var_sample')`` is returned.
+    :rtype: str
+    :raises RuntimeError: if ``wrf2arl_dir`` is an empty string and it is trying to find a file in that directory, or if
+     the specified file does not exist.
+    """
     if not os.path.isabs(variable_file) and not variable_file.startswith('.'):
         if wrf2arl_dir == '':
             raise RuntimeError('No wrf2arl directory specified in the config. To indicate a variable file in the '
@@ -75,7 +157,34 @@ def _get_variable_file(variable_file, wrf2arl_dir):
 
 def drive_wrfnc2arl(file_pattern, arl_variable_file, recursive=False, output_dir='.',
                     output_pattern=_default_output_pattern):
+    """
+    Main function to drive the bulk conversion of WRF output files to ARL files
 
+    :param file_pattern: a glob pattern to match files against
+    :type file_pattern: str
+
+    :param arl_variable_file: the filename for the file mapping WRF -> ARL variables. If given as an absolute path or a
+     relative path starting with '.' or '..', it is assumes to be a full path to a file. Otherwise, it is assumed to be
+     the name of a file in the wrf2arl directory; e.g. if given 'var_sample', then
+     ``os.path.join(wrf2arl_dir, 'var_sample')`` is what is used.
+    :type arl_variable_file: str
+
+    :param recursive: optional, if ``True``, then all directories under the current one are searched for files
+     matching ``file_pattern``.
+    :type recursive: bool
+
+    :param output_dir: the directory to place the ARL files into. If ``recursive = True``, then the directory structure
+     of the current directory is mirrored in the output directory.
+    :type output_dir: str
+
+    :param output_pattern: the pattern to use to name the output ARL files. Both the bracket syntax for string
+     formatting and `datetime.strptime` syntax will be applied, with the `datetime` formatting second. The string
+     formatting will give the domain number as the ``domain`` keyword. E.g. "%Y%m%d.%Hz.wrf_d{domain:02}" would be
+     transformed into "20160501.00z.wrf_d01" for a domain 1 WRF file on 00:00 May 1, 2016.
+    :type output_pattern: str
+
+    :return: None, saves the ARL files in ``output_dir``.
+    """
     config = PyarlConfig()
     wrf2arl_dir = config[WRF2ARL][WRF2ARL_DIR]
     if wrf2arl_dir == '':
@@ -91,6 +200,19 @@ def drive_wrfnc2arl(file_pattern, arl_variable_file, recursive=False, output_dir
 
 
 def setup_clargs(parser=None):
+    """
+    Setup command line arguments for the bulk wrf2arl program.
+
+    :param parser: if given, an argument parser. Generally used if adding this program as a subcommand for a larger
+     program, create a new parser as a subparser and pass it to this function. If not given, an argument parser is
+     created.
+    :type parser: ArgumentParser
+
+    :return: if ``parser`` is not given, the arguments specified on the command line are returned as a dictionary. If
+     parser is given, then it is modified in-place to have all the desired command line arguments. In either case, the
+     value for 'exec_fxn' will be the driver function to call with the other command line arguments as keyword values.
+    :rtype: dict or None.
+    """
     description = 'Bulk convert WRF files to ARL format'
     if parser is None:
         parser = ArgumentParser(description=description)
@@ -115,7 +237,7 @@ def setup_clargs(parser=None):
     parser.add_argument('-O', '--output-pattern', default=_default_output_pattern,
                         help='The naming pattern to use for output files. Python datetime formatting can be used to '
                              'specify how to include the date and its bracket formatting for the keyword "domain" '
-                             'will be replaced with the WRF domain number. Default is "%(default)s".' )
+                             'will be replaced with the WRF domain number. Default is "%(default)s".')
 
     parser.set_defaults(exec_fxn=drive_wrfnc2arl)
 
@@ -134,6 +256,18 @@ def main():
 ############################
 
 def _datefmt_to_re(fmt):
+    """
+    Convert a date format string to a regular expression that will match a date in that format.
+
+    For example, "%Y-%m-%d" would be converted to "\d\d\d\d-\d\d-\d\d", matching a four digit year, two digit month, and
+    two digit day. Currently only the date format specifiers "%Y", "%m", "%d", "%H", "%M", and "%S" are implemented.
+
+    :param fmt: the date format string to convert
+    :type fmt: str
+
+    :return: the regular expression string
+    :rtype: str
+    """
     replacements = {'%Y': r'\d\d\d\d', '%m': r'\d\d', '%d': r'\d\d', '%H': r'\d\d', '%M': r'\d\d', '%S': r'\d\d'}
     for old, new in replacements.items():
         fmt = fmt.replace(old, new)
@@ -146,6 +280,30 @@ def _datefmt_to_re(fmt):
 
 def drive_link_reinit(spinup_time, output_dir, input_dir='.', reinit_pattern=_default_reinit_pattern,
                       arl_pattern=_default_output_pattern):
+    """
+    Main driver function to link ARL files across multiple reinit subrun directories to one directory
+
+    :param spinup_time: duration from the start of the reinit run to ignore (and not link). Only files for times greater
+     than the reinit start time + spinup time are linked.
+    :type spinup_time: `datetime.timedelta`
+
+    :param output_dir: the directory to link the ARL files to
+    :type output_dir: str
+
+    :param input_dir: the directory containing the reinit directories to link from.
+    :type input_dir: str
+
+    :param reinit_pattern: the pattern that a reinit directory name should follow. The directory name must include the
+     reinit start time, and the pattern for that start time must be specified here using `datetime.strftime` format
+     syntax.
+    :type reinit_pattern: str
+
+    :param arl_pattern: the pattern that an ARL filename follows. Must include the format of the file's date using
+     `datetime.strftime` format. Currently assumes each ARL file only has one time.
+    :type arl_pattern: str
+
+    :return: None
+    """
     # Don't care what domain it is, just link it
     arl_date_pattern = re.sub(r'\{.*?domain.*?\}', '', arl_pattern)
     arl_re_pattern = _datefmt_to_re(arl_date_pattern)
@@ -172,6 +330,15 @@ def drive_link_reinit(spinup_time, output_dir, input_dir='.', reinit_pattern=_de
 
 
 def _parse_time_string_dhms(time_str):
+    """
+    Parse a time string in the format [Nd][Nh][Nm][Ns] into a timedelta.
+
+    :param time_str: the time string to parse
+    :type time_str: str
+
+    :return: the corresponding time delta
+    :rtype: `datetime.timedelta`
+    """
     parts = {'days': re.compile(r'\d+(?=d)'),
              'hours': re.compile(r'\d+(?=h)'),
              'minutes': re.compile(r'\d+(?=m)'),
@@ -187,6 +354,19 @@ def _parse_time_string_dhms(time_str):
 
 
 def setup_link_clargs(parser=None):
+    """
+    Setup command line arguments for the reinit file linking program.
+
+    :param parser: if given, an argument parser. Generally used if adding this program as a subcommand for a larger
+     program, create a new parser as a subparser and pass it to this function. If not given, an argument parser is
+     created.
+    :type parser: ArgumentParser
+
+    :return: if ``parser`` is not given, the arguments specified on the command line are returned as a dictionary. If
+     parser is given, then it is modified in-place to have all the desired command line arguments. In either case, the
+     value for 'exec_fxn' will be the driver function to call with the other command line arguments as keyword values.
+    :rtype: dict or None.
+    """
     description = 'Link files from multiple reinitialization directories into one'
     if parser is None:
         parser = ArgumentParser(description=description)
