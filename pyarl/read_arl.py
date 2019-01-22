@@ -1,5 +1,6 @@
 from __future__ import print_function, absolute_import, division, unicode_literals
 
+from datetime import datetime as dtime
 import numpy as np
 
 #TODO: test with 16-bit files
@@ -86,27 +87,42 @@ def read_arl(filename):
     :param filename: the ARL file to read
     :type filename: str
 
-    :return: data, file header, index header, level headers
-        data - a dictionary of numpy arrays with the value for each variable
-        record header - a list of dictionaries containing the information about each of the records, including the index
+    :return: a dictionary where the keys are the time of each record (as a string in %y-%m-%d_%H:%M:%S format)
+     and the values are dictionaries with the following keys:
+        'data' - a dictionary of numpy arrays with the value for each variable
+        'record hdrs' - a list of dictionaries containing the information about each of the records, including the index
          record at the start of the file.
-        index header - a dictionary containing the information for this index in the file.
-        level headers - a list of dictionaries giving the level height and list of variables at each model level.
+        'grid_hdr' - a dictionary containing the information for the 2D grid the data is on in the file.
+        'level_hdrs' - a list of dictionaries giving the level height and list of variables at each model level.
+    :rtype: dict
     """
 
+    results = dict()
     with open(filename, 'rb') as fhandle:
-        record_hdr, grid_hdr, level_hdrs = _read_arl_header(fhandle)
+        # get how long the file is
+        file_length = fhandle.seek(0, 2)
+        # then rewind to the beginning
+        fhandle.seek(0)
 
-        _advance_to_first_var(fhandle)
+        while fhandle.tell() < file_length:
+            record_hdrs, grid_hdr, level_hdrs = _read_arl_header(fhandle)
 
-        nx = grid_hdr['n_x_points']
-        ny = grid_hdr['n_y_points']
-        nz = grid_hdr['n_levels']
-        data = _make_empty_arrays_for_vars(level_hdrs, nx, ny, nz)
+            _advance_to_first_var(fhandle)
 
-        record_hdr = [record_hdr] + _read_data(fhandle, data, level_hdrs)
+            nx = grid_hdr['n_x_points']
+            ny = grid_hdr['n_y_points']
+            nz = grid_hdr['n_levels']
+            data = _make_empty_arrays_for_vars(level_hdrs, nx, ny, nz)
 
-    return data, record_hdr, grid_hdr, level_hdrs
+            index_hdr = record_hdrs
+            record_hdrs = [record_hdrs] + _read_data(fhandle, data, level_hdrs)
+            record_dict = {'record_hdrs': record_hdrs, 'data': data, 'grid_hdr': grid_hdr, 'level_hdrs': level_hdrs}
+            record_key = dtime(index_hdr['year'], index_hdr['month'], index_hdr['day'], index_hdr['hour']).strftime(
+                '%y-%m-%d_%H:%M:%S'
+            )
+            results[record_key] = record_dict
+
+    return results
 
 
 def _read_arl_header(fhandle):
