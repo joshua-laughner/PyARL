@@ -243,6 +243,8 @@ def setup_clargs(parser=None):
                              'specify how to include the date and its bracket formatting for the keyword "domain" '
                              'will be replaced with the WRF domain number. Default is "%(default)s".')
 
+    # TODO add subcommand to set up/view config
+
     parser.set_defaults(exec_fxn=drive_wrfnc2arl)
 
     if i_am_main:
@@ -282,8 +284,35 @@ def _datefmt_to_re(fmt):
         return fmt
 
 
+def _link_arl_files(valid_arl_files, output_dir):
+    for arl_src in valid_arl_files:
+        arl_src_basename = os.path.basename(arl_src)
+        arl_dest = os.path.join(output_dir, arl_src_basename)
+        if os.path.islink(arl_dest):
+            os.remove(arl_dest)
+        os.symlink(arl_src, arl_dest)
+
+
+def _concatenate_arl_files(valid_arl_files, output_dir, reinit_start_time):
+    files_by_domain = dict()
+    for f in valid_arl_files:
+        fbase = os.path.basename(f)
+        domain = int(re.search(r'(?<=d)\d\d', fbase).group())
+        files_by_domain[f] = domain
+
+    unique_domains = set([d for d in files_by_domain.values()])
+    for domain in unique_domains:
+        domain_files = sorted([f for f, dom in files_by_domain.keys() if dom == domain])
+
+        output_filename = 'd{domain:02d}_{date}.arl'.format(domain=domain, date=reinit_start_time.strftime('%Y%m%d'))
+        with open(os.path.join(output_dir, output_filename), 'wb') as out_handle:
+            for infile in domain_files:
+                with open(infile, 'rb') as in_handle:
+                    out_handle.write(in_handle.read())
+
+
 def drive_link_reinit(spinup_time, output_dir, input_dir='.', reinit_pattern=_default_reinit_pattern,
-                      arl_pattern=_default_output_pattern):
+                      arl_pattern=_default_output_pattern, concatenate=False):
     """
     Main driver function to link ARL files across multiple reinit subrun directories to one directory
 
@@ -306,6 +335,11 @@ def drive_link_reinit(spinup_time, output_dir, input_dir='.', reinit_pattern=_de
      `datetime.strftime` format. Currently assumes each ARL file only has one time.
     :type arl_pattern: str
 
+    :param concatenate: if ``True``, then instead of linking ARL files in the output directory will concatenate all the
+     selected ARL files into one. The files will be named dXX.yyyymmdd.arl, where XX is the WRF domain number, and
+     yyyymmdd is the year-month-day that the reinit starts on. Input ARL files must have the domain number in the name
+     as "dXX".
+
     :return: None
     """
     # Don't care what domain it is, just link it
@@ -321,16 +355,18 @@ def drive_link_reinit(spinup_time, output_dir, input_dir='.', reinit_pattern=_de
             continue
 
         possible_arl_files = os.listdir(os.path.join(input_dir, d))
+        valid_arl_files = []
         for f in possible_arl_files:
             date_part = re.search(arl_re_pattern, f)
             if date_part is not None:
                 arl_date = dtime.strptime(date_part.group(), arl_date_pattern)
                 if arl_date - reinit_datetime > spinup_time:
-                    arl_src = os.path.abspath(os.path.join(input_dir, d, f))
-                    arl_dest = os.path.join(output_dir, f)
-                    if os.path.islink(arl_dest):
-                        os.remove(arl_dest)
-                    os.symlink(arl_src, arl_dest)
+                    valid_arl_files.append(os.path.join(input_dir, d, f))
+
+        if concatenate:
+            _concatenate_arl_files(valid_arl_files, output_dir, reinit_datetime)
+        else:
+            _link_arl_files(valid_arl_files, output_dir)
 
 
 def _parse_time_string_dhms(time_str):
@@ -386,6 +422,8 @@ def setup_link_clargs(parser=None):
                              'valid values.')
     parser.add_argument('input_dir', default='.', nargs='?', help='The directory to find the Reinit subdirectories in.')
     parser.add_argument('-o', '--output-dir', default='.', help='Where to link the ARL files to')
+    parser.add_argument('-c', '--concatenate', action='store_true', help='Concatenate the ARL files from reinit '
+                                                                         'directories into combined ARL files.')
     parser.add_argument('--reinit-pattern', default=_default_reinit_pattern,
                         help='The pattern to match reinitialization directories. Default is "%(default)s".')
     parser.add_argument('--arl-pattern', default=_default_output_pattern,
